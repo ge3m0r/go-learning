@@ -7,6 +7,7 @@ import (
 	regexp "github.com/dlclark/regexp2"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
+	jwt "github.com/golang-jwt/jwt/v5"
 	"net/http"
 	"time"
 )
@@ -37,7 +38,7 @@ func NewHandler(svc *service.UserService) *UserHandler {
 func (h *UserHandler) RegisterRoutes(server *gin.Engine) {
 	ug := server.Group("/users")
 	{
-		ug.POST("/login", h.Login)
+		ug.POST("/login", h.LoginJWT)
 		//server.PUT("/user/signup", h.Signup)
 		ug.POST("/signup", h.SignUp)
 		ug.GET("/profile", h.Profile)
@@ -91,45 +92,6 @@ func (h *UserHandler) SignUp(c *gin.Context) {
 	default:
 		c.String(http.StatusOK, "系统错误")
 
-	}
-
-}
-
-func (h *UserHandler) Login(c *gin.Context) {
-	type Req struct {
-		Email    string
-		Password string
-	}
-	var req Req
-	if err := c.Bind(&req); err != nil {
-		return
-	}
-	u, err := h.svc.Login(c, req.Email, req.Password)
-
-	switch err {
-	case nil:
-		sess := sessions.Default(c)
-		sess.Set("userId", u.ID)
-		sess.Options(sessions.Options{
-			MaxAge:   900,
-			HttpOnly: true,
-		})
-		err = sess.Save()
-		if err != nil {
-			c.String(http.StatusOK, "系统错误")
-			return
-		}
-		c.String(http.StatusOK, "登录成功")
-	case service.ErrInvalidUserOrPassword:
-		c.String(http.StatusOK, "用户名或者密码不对")
-
-	default:
-		c.String(http.StatusOK, "系统错误")
-
-	}
-	if err != nil {
-
-		return
 	}
 
 }
@@ -192,4 +154,53 @@ func (h *UserHandler) Edit(c *gin.Context) {
 		c.String(http.StatusOK, "系统错误")
 
 	}
+}
+
+func (h *UserHandler) LoginJWT(c *gin.Context) {
+	type Req struct {
+		Email    string
+		Password string
+	}
+	var req Req
+	if err := c.Bind(&req); err != nil {
+		return
+	}
+	u, err := h.svc.Login(c, req.Email, req.Password)
+
+	switch err {
+	case nil:
+		uc := &UserClaims{
+			Uid:       u.ID,
+			UserAgent: c.GetHeader("User-Agent"),
+			RegisteredClaims: jwt.RegisteredClaims{
+				ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute * 30)),
+			},
+		}
+		token := jwt.NewWithClaims(jwt.SigningMethodHS512, uc)
+		tokenStr, err := token.SignedString([]byte(JWTKey))
+		if err != nil {
+			c.String(http.StatusOK, "系统错误")
+		}
+		c.Header("x-jwt-token", tokenStr)
+		c.String(http.StatusOK, "登录成功")
+	case service.ErrInvalidUserOrPassword:
+		c.String(http.StatusOK, "用户名或者密码不对")
+
+	default:
+		c.String(http.StatusOK, "系统错误")
+
+	}
+	if err != nil {
+
+		return
+	}
+
+}
+
+const JWTKey = "qTzTTNzQcpXofciQynLVq1WbwRFeQrFn"
+
+type UserClaims struct {
+	jwt.RegisteredClaims
+	Uid       int64
+	UserAgent string
 }
